@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import Icon from "@hackclub/icons";
 import posthog from "posthog-js";
 
@@ -8,12 +8,16 @@ import RootLayout from "@/components/layout/RootLayout";
 // We mostly display this to a really small subset of Safari users.
 
 export default function BrowserUpdatePage() {
-  const ua = navigator.userAgent.toLowerCase();
-  const platform = navigator.platform.toLowerCase();
+  const [ua, setUa] = useState("");
+  const [platform, setPlatform] = useState("");
 
   useEffect(() => {
-    posthog.capture("outdated_browser_detected", { userAgent: navigator.userAgent });
-    console.log(`(update-browser.tsx) outdated browser: ${navigator.userAgent}`);
+      if (typeof navigator !== "undefined") {
+          setUa(navigator.userAgent.toLowerCase());
+          setPlatform(navigator.platform.toLowerCase());
+          posthog.capture("outdated_browser_detected", { userAgent: navigator.userAgent });
+          console.log(`(update-browser.tsx) outdated browser: ${navigator.userAgent}`);
+      }
   }, []);
 
   return (
@@ -21,7 +25,7 @@ export default function BrowserUpdatePage() {
       <div className="flex flex-col items-center justify-center gap-2 p-16 h-full">
         <Icon glyph="download" size={128} className="text-muted" />
         <h1 className="text-3xl font-bold">Update your browser</h1>
-        
+
         <p className="text-muted text-xl w-1/2 text-center">
           {
             ua.includes("safari/")
