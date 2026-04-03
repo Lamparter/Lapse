@@ -277,6 +277,7 @@ export default function Page() {
   const [error, setError] = useState<string | null>(null);
 
   const [isPaused, setIsPaused] = useState(false);
+  const [hasPromptedBackupDownload, setHasPromptedBackupDownload] = useState(false);
 
   const mainPreviewRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -391,6 +392,79 @@ export default function Page() {
     }
   }
 
+  function downloadFile(blob: Blob, name: string) {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = name;
+    anchor.style.display = "none";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function createBackupPrefix() {
+    return `lapse-recording-${new Date().toISOString().replaceAll(":", "-")}`;
+  }
+
+  async function downloadLocalTimelapseBackup() {
+    await deviceStorage.sync();
+
+    let sessions = await retryable(async () => await deviceStorage.getTimelapseVideoSessions());
+    if (sessions instanceof Error)
+      throw sessions;
+
+    sessions = sessions.filter(x => x.size > MIN_SESSION_SIZE_BYTES);
+
+    const timelapse = await retryable(async () => await deviceStorage.getTimelapse());
+    if (timelapse instanceof Error)
+      throw timelapse;
+
+    if (!timelapse || sessions.length == 0)
+      throw new Error("No local timelapse, or no sessions have been captured");
+
+    const backupPrefix = createBackupPrefix();
+    const metadataBlob = new Blob([
+      JSON.stringify({
+        startedAt: timelapse.startedAt,
+        snapshots: timelapse.snapshots,
+        sessionCount: sessions.length
+      }, null, 2)
+    ], { type: "application/json" });
+
+    downloadFile(metadataBlob, `${backupPrefix}.json`);
+    sessions.forEach((session, index) => downloadFile(session, `${backupPrefix}.session-${index + 1}.webm`));
+
+    posthog.capture("timelapse_backup_downloaded", {
+      sessions: sessions.length,
+      snapshots: timelapse.snapshots.length
+    });
+  }
+
+  async function maybeDownloadBackupBeforeUpload() {
+    if (hasPromptedBackupDownload)
+      return;
+
+    setHasPromptedBackupDownload(true);
+
+    if (!window.confirm("Download a local backup before upload? This can protect your recording if upload fails."))
+      return;
+
+    try {
+      await downloadLocalTimelapseBackup();
+    }
+    catch (error) {
+      console.error("(create.tsx) backup download failed", error);
+      posthog.capture("timelapse_backup_download_failed", { error });
+
+      if (window.confirm("Backup download failed. Continue uploading anyway?"))
+        return;
+
+      throw error;
+    }
+  }
+
   async function uploadLocalTimelapse(options: { stopSession: boolean }) {
     if (isUploading) {
       return;
@@ -405,6 +479,8 @@ export default function Page() {
       await videoSession.stop();
       setVideoSession(null);
     }
+
+    await maybeDownloadBackupBeforeUpload();
 
     setIsUploading(true);
 
@@ -568,6 +644,7 @@ export default function Page() {
 
     await videoSession.stop();
     setVideoSession(null);
+    setHasPromptedBackupDownload(false);
     await deviceStorage.sync();
 
     const size = await deviceStorage.getTimelapseVideoSize();
@@ -587,6 +664,7 @@ export default function Page() {
   }
 
   async function submitExistingTimelapse() {
+    setHasPromptedBackupDownload(false);
     await uploadLocalTimelapse({ stopSession: videoSession != null });
   }
 
